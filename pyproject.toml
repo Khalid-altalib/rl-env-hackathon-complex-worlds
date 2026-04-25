@@ -11,7 +11,10 @@ dependencies = [
     "openreward",
     "catanatron",
     "anthropic",
+    "claude-agent-sdk",
     "pydantic>=2",
+    "overcooked-ai",
+    "diplomacy",
 ]
 
 [project.optional-dependencies]

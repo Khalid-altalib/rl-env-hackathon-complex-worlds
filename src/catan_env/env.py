@@ -3,6 +3,9 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from catanatron import Game, RandomPlayer, Color
 from catanatron.models.actions import generate_playable_actions
+from catanatron.players.weighted_random import WeightedRandomPlayer
+from catanatron.players.value import ValueFunctionPlayer
+from catanatron.players.minimax import AlphaBetaPlayer
 
 from openreward.environments import (
     Environment,
@@ -19,6 +22,17 @@ COLORS = {
     "BLUE": Color.BLUE,
     "WHITE": Color.WHITE,
     "ORANGE": Color.ORANGE,
+}
+
+
+# Difficulty presets. Each entry is (opponent_class, num_opponents, vps_to_win, friendly_robber).
+# Higher tiers = harder for the LLM agent.
+DIFFICULTY = {
+    "very_easy": (RandomPlayer, 1, 5, True),
+    "easy":      (RandomPlayer, 3, 8, True),
+    "medium":    (WeightedRandomPlayer, 3, 10, False),
+    "hard":      (ValueFunctionPlayer, 3, 10, False),
+    "very_hard": (AlphaBetaPlayer, 3, 10, False),
 }
 
 
@@ -69,19 +83,34 @@ class CatanEnv(Environment):
         self.agent_color: Color = COLORS[self.task_spec.get("agent_color", "RED")]
         self.max_ticks: int = int(self.task_spec.get("max_ticks", 1000))
         self.visualize: bool = bool(self.task_spec.get("visualize", False))
+        self.difficulty: str = str(self.task_spec.get("difficulty", "medium"))
+        if self.difficulty not in DIFFICULTY:
+            raise ValueError(f"Unknown difficulty {self.difficulty!r}; choose from {list(DIFFICULTY)}")
+        opp_cls, num_opp, vps, friendly = DIFFICULTY[self.difficulty]
+        self.opp_cls = opp_cls
+        self.num_opponents: int = int(num_opp)
+        self.vps_to_win: int = int(vps)
+        self.friendly_robber: bool = bool(friendly)
         self.player: Optional[OpenRewardPlayer] = None
         self.game: Optional[Game] = None
         self._ticks = 0
         self._agent_vp_prev = 0
         self._opp_vp_prev: dict[Color, int] = {}
         self._terminal_reward_emitted = False
+        self._cum_reward: float = 0.0
         self.last_view_url: Optional[str] = None
 
     def setup(self):
         self.player = OpenRewardPlayer(self.agent_color)
-        opponents = [c for c in (Color.RED, Color.BLUE, Color.WHITE, Color.ORANGE) if c != self.agent_color]
-        players = [self.player] + [RandomPlayer(c) for c in opponents]
-        self.game = Game(players, seed=self.seed)
+        all_other = [c for c in (Color.RED, Color.BLUE, Color.WHITE, Color.ORANGE) if c != self.agent_color]
+        opp_colors = all_other[: self.num_opponents]
+        players = [self.player] + [self.opp_cls(c) for c in opp_colors]
+        self.game = Game(
+            players,
+            seed=self.seed,
+            vps_to_win=self.vps_to_win,
+            friendly_robber=self.friendly_robber,
+        )
         self._advance_until_agent_or_end()
         self._agent_vp_prev = _vp(self.game.state, self.agent_color)
         self._opp_vp_prev = {c: _vp(self.game.state, c) for c in self.game.state.colors if c != self.agent_color}
@@ -148,11 +177,19 @@ class CatanEnv(Environment):
         return max(-1.0, min(1.0, reward))
 
     def get_prompt(self):
+        opp_name = self.opp_cls.__name__
+        robber_note = (
+            "Robber is FRIENDLY (it blocks production but doesn't steal cards)."
+            if self.friendly_robber
+            else "Robber is HOSTILE (it blocks production AND steals one card from a victim)."
+        )
         text = (
-            "You are playing Settlers of Catan as the "
-            f"{self.agent_color.value} player against three random bots. "
-            "Win by reaching 10 victory points (VP). VP come from settlements (+1), "
-            "cities (+2), longest road (+2), largest army (+2), and VP development cards (+1).\n\n"
+            f"You are playing Settlers of Catan as the {self.agent_color.value} player "
+            f"against {self.num_opponents} {opp_name} opponent(s). "
+            f"Win by reaching {self.vps_to_win} victory points (VP). "
+            f"{robber_note} "
+            "VP come from settlements (+1), cities (+2), longest road (+2), "
+            "largest army (+2), and VP development cards (+1).\n\n"
             "On each of your turns:\n"
             "  1. Call `list_legal_actions` to see indexed action options.\n"
             "  2. Call `play_action` with the chosen index.\n"
@@ -229,6 +266,7 @@ class CatanEnv(Environment):
         self._advance_until_agent_or_end()
 
         reward = self._compute_reward()
+        self._cum_reward += reward
         finished = self._terminal()
         self._publish_view()
 

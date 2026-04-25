@@ -3,12 +3,16 @@
 Uses claude-agent-sdk, which authenticates through the user's Claude Code
 subscription (no ANTHROPIC_API_KEY needed). The env's tools are exposed as an
 in-process MCP server. The full message stream is saved as a trajectory JSON.
+
+Also exposes `run_catan_episode(...)` as a reusable helper that scripts
+(e.g. scripts/experience_smoketest.py) import to run a single episode with a
+configurable system-prompt extension.
 """
 
 import json
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 import pytest
 
@@ -98,9 +102,34 @@ def _make_tools(env: CatanEnv):
     return [get_state, list_legal_actions, play_action]
 
 
-@pytest.mark.asyncio
-async def test_claude_plays_catan():
-    env = CatanEnv(task_spec={"seed": 7, "agent_color": "RED", "max_ticks": 4000, "visualize": True})
+BASE_SYSTEM_PROMPT = (
+    "You are an agent playing Settlers of Catan. Win by reaching the victory-point "
+    "target stated in the initial user message. Use the catan tools to query legal "
+    "actions and play moves; keep responses brief and favor tool calls. Stop only "
+    "when the game is over (a play_action result will say so) or after many turns of play."
+)
+
+
+async def run_catan_episode(
+    task_spec: Optional[dict] = None,
+    max_turns: int = 80,
+    model: str = "claude-sonnet-4-5",
+    extra_system_prompt: str = "",
+    label: str = "",
+    visualize: bool = False,
+) -> dict:
+    """Run one Claude-vs-Catan episode and save its trajectory.
+
+    Returns a dict with: ticks, winner, agent_vp_final, cum_reward,
+    trajectory_path, system_prompt, finished, cli_error.
+    """
+    spec = dict(task_spec or {})
+    spec.setdefault("seed", 7)
+    spec.setdefault("agent_color", "RED")
+    spec.setdefault("max_ticks", 4000)
+    spec.setdefault("visualize", visualize)
+
+    env = CatanEnv(task_spec=spec)
     env.setup()
     if env.last_view_url:
         print(f"\n>>> Watch live: {env.last_view_url} <<<\n")
@@ -114,12 +143,14 @@ async def test_claude_plays_catan():
         "mcp__catan__play_action",
     ]
 
-    system_prompt = (
-        "You are an agent playing Settlers of Catan as RED against three random bots. "
-        "Win by reaching 10 victory points. Use the catan tools to query legal actions "
-        "and play moves; keep responses brief and favor tool calls. Stop only when the "
-        "game is over (a play_action result will say so) or after many turns of play."
-    )
+    system_prompt = BASE_SYSTEM_PROMPT
+    if extra_system_prompt.strip():
+        system_prompt = (
+            BASE_SYSTEM_PROMPT
+            + "\n\n--- Lessons from past games (experience library) ---\n"
+            + extra_system_prompt.strip()
+            + "\n--- end lessons ---"
+        )
 
     initial_text = (
         env.get_prompt()[0].text
@@ -133,8 +164,8 @@ async def test_claude_plays_catan():
         mcp_servers={"catan": server},
         allowed_tools=allowed,
         permission_mode="bypassPermissions",
-        max_turns=30,
-        model="claude-sonnet-4-5",
+        max_turns=max_turns,
+        model=model,
         stderr=lambda line: stderr_lines.append(line),
     )
 
@@ -144,11 +175,14 @@ async def test_claude_plays_catan():
         "initial_user_prompt": initial_text,
         "allowed_tools": allowed,
         "task_spec": env.task_spec,
+        "max_turns": max_turns,
+        "model": model,
+        "label": label,
     }]
 
     finished_marker_seen = False
-    cli_error: str | None = None
-    last_result_subtype: str | None = None
+    cli_error: Optional[str] = None
+    last_result_subtype: Optional[str] = None
     try:
         async for msg in query(prompt=initial_text, options=options):
             trajectory.append({"kind": "message", **_message_to_dict(msg)})
@@ -167,22 +201,46 @@ async def test_claude_plays_catan():
         "winner": winner.value if winner else None,
         "finished": finished_marker_seen,
         "agent_vp_final": env._agent_vp_prev,
+        "cum_reward": env._cum_reward,
+        "last_result_subtype": last_result_subtype,
     }
     trajectory.append(summary)
 
     TRAJ_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = TRAJ_DIR / f"claude_catan_{int(time.time())}.json"
+    name = f"claude_catan_{label}_{int(time.time())}.json" if label else f"claude_catan_{int(time.time())}.json"
+    out_path = TRAJ_DIR / name
     out_path.write_text(json.dumps(trajectory, indent=2, default=str))
     print(f"\ntrajectory saved to {out_path}")
     print(f"summary: {summary}")
     if stderr_lines:
-        print(f"--- last stderr lines ---")
+        print("--- last stderr lines ---")
         for line in stderr_lines[-30:]:
             print(line.rstrip())
     if cli_error:
         print(f"CLI error: {cli_error}")
 
+    return {
+        "ticks": env._ticks,
+        "winner": winner.value if winner else None,
+        "agent_vp_final": env._agent_vp_prev,
+        "cum_reward": env._cum_reward,
+        "finished": finished_marker_seen,
+        "trajectory_path": str(out_path),
+        "system_prompt": system_prompt,
+        "cli_error": cli_error,
+        "last_result_subtype": last_result_subtype,
+        "stderr_tail": stderr_lines[-30:],
+    }
+
+
+@pytest.mark.asyncio
+async def test_claude_plays_catan():
+    result = await run_catan_episode(
+        task_spec={"seed": 7, "agent_color": "RED", "max_ticks": 4000},
+        max_turns=30,
+        visualize=True,
+    )
     benign = {"success", "error_max_turns"}
-    if cli_error is not None and last_result_subtype not in benign:
-        raise AssertionError(f"CLI failed: {cli_error}")
-    assert env._ticks > 0, "no ticks executed — agent never called play_action"
+    if result["cli_error"] is not None and result["last_result_subtype"] not in benign:
+        raise AssertionError(f"CLI failed: {result['cli_error']}")
+    assert result["ticks"] > 0, "no ticks executed — agent never called play_action"

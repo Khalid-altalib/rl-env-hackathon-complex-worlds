@@ -1,0 +1,41 @@
+[
+  {
+    "phase": "baseline",
+    "difficulty": "very_easy",
+    "seed": 101,
+    "ticks": 79,
+    "winner": null,
+    "agent_vp_final": 2,
+    "cum_reward": 0.1,
+    "finished": false,
+    "trajectory_path": "/Users/julie3399/rl-env-hackathon-complex-worlds/trajectories/claude_catan_baseline_very_easy_s101_1777126386.json",
+    "last_result_subtype": "error_max_turns",
+    "cli_error": "Exception: Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"
+  },
+  {
+    "phase": "baseline",
+    "difficulty": "very_easy",
+    "seed": 102,
+    "ticks": 75,
+    "winner": null,
+    "agent_vp_final": 4,
+    "cum_reward": 0.30000000000000004,
+    "finished": false,
+    "trajectory_path": "/Users/julie3399/rl-env-hackathon-complex-worlds/trajectories/claude_catan_baseline_very_easy_s102_1777126720.json",
+    "last_result_subtype": "error_max_turns",
+    "cli_error": "Exception: Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"
+  },
+  {
+    "phase": "baseline",
+    "difficulty": "very_easy",
+    "seed": 103,
+    "ticks": 90,
+    "winner": null,
+    "agent_vp_final": 2,
+    "cum_reward": 0.15000000000000002,
+    "finished": false,
+    "trajectory_path": "/Users/julie3399/rl-env-hackathon-complex-worlds/trajectories/claude_catan_baseline_very_easy_s103_1777127035.json",
+    "last_result_subtype": "error_max_turns",
+    "cli_error": "Exception: Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"
+  }
+]
