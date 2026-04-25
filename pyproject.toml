@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "catan-env"
+version = "0.1.0"
+description = "OpenReward agentic environment wrapping Catanatron"
+requires-python = ">=3.10"
+dependencies = [
+    "openreward",
+    "catanatron",
+    "anthropic",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
